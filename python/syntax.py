@@ -1,13 +1,18 @@
 import ast
 import codecs
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import collections
+
+a : Dict[str, int] = {}
 
 opr_dic = {
     ast.Eq : '==',
+    ast.Lt  : '<',
     ast.LtE : '<=',
     ast.Add : '+',
+    ast.Sub : '-',
+    ast.USub : '-',
     ast.Mod : '%',
     ast.Not : 'not',
     ast.Is : 'is',
@@ -17,8 +22,6 @@ opr_dic = {
     ast.And: 'and',
     ast.In : 'in'
 }
-
-classes = collections.OrderedDict()
 
 a = True
 b = True
@@ -39,12 +42,76 @@ x: float = 1.2
 x = (1,2)
 y = x[1]
 
-def sub(a:int, b: int, e: List[Tuple[int,float]]):
+def sub(a:int, b: int, e: List[Tuple[int,float]]) -> int:
     c = a + b
     return c
 
+def find(search_iteration):
+    """リスト内で条件に合う要素を返す。
+    """
+    try:
+        return next(search_iteration)
+    except StopIteration:
+        return None
+
 class Obj:
+    __slots__ = [ 'parent' ]
+    
+    def get_name(self):
+        if isinstance(self, Name):
+            return self.id
+        else:
+            return None
+
+    def resolve_name(self, vars):
+        pass
+
+class Type(Obj):
     pass
+
+class ArrayType(Type):
+    def __init__(self, element_type, shape: List[int] = None):
+        self.element_type = element_type
+        self.shape = shape
+
+    def __str__(self):
+        return 'List[%s]' % self.element_type
+
+class TupleType(Type):
+    def __init__(self, element_types):
+        self.element_types = element_types
+        for x in element_types:
+            if isinstance(x, Obj):
+                x.parent = self
+
+    def __str__(self):
+        return 'Tuple[%s]' % ', '.join(str(x) for x in self.element_types)
+
+class DictType(TupleType):
+    def __init__(self, element_types):
+        super().__init__(element_types)
+
+    def __str__(self):
+        return 'Dict[%s]' % ', '.join(str(x) for x in self.element_types)
+
+def to_type(trm):    
+    if isinstance(trm, Subscript):
+        assert isinstance(trm.slice, Index)
+        name = trm.value.get_name()
+        if name == 'Dict' or name == 'Tuple':
+            assert isinstance(trm.slice.value, Tuple_)
+            element_types = [ to_type(x) for x in trm.slice.value.elts ]
+
+            if name == 'Dict':
+                return DictType(element_types)
+            else:
+                return TupleType(element_types)
+
+        elif name == 'List':
+            element_type = to_type(trm.slice.value)
+            return ArrayType(element_type)
+
+    return trm
 
 class Term(Obj):
     __slots__ = [ 'type' ]
@@ -85,7 +152,31 @@ class Index(Term):
         self.value = term(self, expr.value)
 
     def __str__(self):
-        return str(self.value)
+        if isinstance(self.value, Tuple_):
+            return ', '.join(str(x) for x in self.value.elts)
+        else:
+            return str(self.value)
+
+class Slice(Obj):
+    __slots__ = [ 'lower', 'upper', 'step' ]
+
+    def __init__(self, expr):
+        self.lower = term(self, expr.lower)
+        self.upper = term(self, expr.upper)
+        self.step = term(self, expr.step)
+
+    def __str__(self):
+        if self.lower is None:
+            s1 = ''
+        else:
+            s1 = str(self.lower)
+
+        if self.upper is None:
+            s2 = ''
+        else:
+            s2 = str(self.upper)
+
+        return '%s:%s' % (s1, s2)
 
 
 class Subscript(Term):
@@ -99,6 +190,8 @@ class Subscript(Term):
     def __str__(self):
         return str(self.value) + '[' + str(self.slice) + ']'
 
+# def find_var(vars, name):
+
 class Name(Term):
     __slots__ = [ 'id', 'var' ]
 
@@ -108,6 +201,14 @@ class Name(Term):
 
     def __str__(self):
         return self.id
+
+    def resolve_name(self, vars):
+        for v in vars:
+            var = find(x for x in v if x.name == self.id)
+            if var is not None:
+                self.var = var
+                break
+
 
 class NameConstant(Term):
     __slots__ = [ 'value' ]
@@ -235,6 +336,11 @@ class Continue(Statement):
     def __str__(self):
         return 'continue\n'
 
+class Break(Statement):
+
+    def __str__(self):
+        return 'break\n'
+
 class Assert(Statement):
     __slots__ = [ 'test', 'msg' ]
 
@@ -299,16 +405,40 @@ class Assign(Statement):
     def __str__(self):
         return '%s = %s\n' % ( ', '.join(str(x) for x in self.targets), self.value)
 
+class AugAssign(Assign):
+    __slots__ = [ 'targets', 'value', 'op' ]
+
+    def __init__(self, stmt):
+        self.targets = [ term(self, stmt.target) ]
+        self.value = term(self, stmt.value)
+        self.op   = opr_dic[type(stmt.op)]
+
+    def __str__(self):
+        return '%s %s= %s\n' % ( ', '.join(str(x) for x in self.targets), self.op, self.value)
+
 class AnnAssign(Assign):
     __slots__ = [ 'targets', 'value', 'tp' ]
 
     def __init__(self, stmt):
         self.targets = [ term(self, stmt.target) ]
         self.value = term(self, stmt.value)
-        self.tp = term(self, stmt.annotation)
+        self.tp = to_type( term(self, stmt.annotation) )
 
     def __str__(self):
         return '%s: %s = %s\n' % (self.targets[0], self.tp, self.value)
+
+def target_vars(parent, target):
+    if isinstance(target, ast.Name):
+        return [ Variable(parent, target.id)  ]
+
+    elif isinstance(target, ast.Tuple):
+        for x in target.elts:
+            assert isinstance(x, ast.Name)
+
+        return [ Variable(parent, x.id) for x in target.elts ]
+
+    else:
+        assert False
 
 class Comprehension:
     __slots__ = [ 'parent', 'iter', 'target', 'ifs' ]
@@ -316,14 +446,16 @@ class Comprehension:
     def __init__(self, parent, cmp):
         self.parent = parent
         self.iter = term(self, cmp.iter)
-        self.target = term(self, cmp.target)
-        self.ifs = Body(self, cmp.ifs)
+        self.target = target_vars(self, cmp.target)
+        self.ifs = [ term(self, x) for x in cmp.ifs]
         if len(cmp.ifs) != 0:
             print('')
 
     def __str__(self):
-        header = 'for %s in %s' % (self.target, self.iter)
-        return header
+        target = ', '.join(str(x) for x in self.target)
+        header = 'for %s in %s' % (target, self.iter)
+        ifs = ''.join( ' if %s' % x for x in self.ifs )
+        return header + ifs
         
 
 class GeneratorExp:
@@ -408,87 +540,137 @@ class For(Statement):
     __slots__ = [ 'target', 'iter', 'body' ]
 
     def __init__(self, stmt):
-        self.target = term(self, stmt.target)
+
+        self.target = target_vars(self, stmt.target)
+
         self.iter = term(self, stmt.iter)
         self.body = Body(self, stmt.body)
 
     def __str__(self):
-        header = 'for %s in %s:' % (self.target, self.iter)
+        target = ', '.join(str(x) for x in self.target)
+        header = 'for %s in %s:' % (target, self.iter)
         return '%s\n%s' % (header, self.body.str_indent())
 
+class ExceptHandler(Statement):
+    __slots__ = [ 'type', 'body' ]
 
-class Variable(Obj):
-    def __init__(self):
-        pass
-
-class Arg(Variable):
-    __slots__ = [ 'parent', 'name' ]
-
-    def __init__(self, parent, arg: ast.arg):
+    def __init__(self, parent, stmt):
         self.parent = parent
-        self.name = arg.arg
-        if arg.annotation is None:
-            self.type = None
-        else:
-            self.type = term(self, arg.annotation)
+        self.body = Body(self, stmt.body)
+        self.type = to_type(term(self, stmt.type))
 
     def __str__(self):
-        if self.type is None:
-            return self.name
-        else:
-            return '%s: %s' % (self.name, self.type)
+        return 'except %s:\n' % self.type + self.body.str_indent()
 
-class Field(Variable):
-    __slots__ = [ 'parent', 'name' ]
+class Try(Statement):
+    __slots__ = [ 'handlers', 'body' ]
+
+    def __init__(self, stmt):
+        self.body = Body(self, stmt.body)
+        self.handlers = [ ExceptHandler(self, x) for x in stmt.handlers ]
+
+    def __str__(self):
+        body = 'try:\n' + self.body.str_indent()
+        for x in self.handlers:
+            body += str(x)
+
+        return body
+    
+
+class Variable(Obj):
+    __slots__ = [ 'parent', 'name', 'type' ]
 
     def __init__(self, parent, name):
         self.parent = parent
         self.name = name
+        self.type = None
+
+    def __str__(self):
+        return self.name
+
+class Arg(Variable):
+    __slots__ = [ 'default' ]
+
+    def __init__(self, parent, arg: ast.arg):
+        super().__init__(parent, arg.arg)
+        if arg.annotation is None:
+            self.type = None
+        else:
+            self.type = to_type( term(self, arg.annotation) )
+        self.default = None
+
+    def __str__(self):
+        if self.default is None:
+            default = ''
+        else:
+            default = ' = %s' % self.default
+
+        if self.type is None:
+            return self.name + default
+        elif isinstance(self.type, ClassDef):
+            return '%s: %s%s' % (self.name, self.type.name, default)
+        else:
+            return '%s: %s%s' % (self.name, self.type, default)
+
+class Field(Variable):
+
+    def __init__(self, parent, name):
+        super().__init__(parent, name)
+        self.type = None
         # attr = asn.targets[0]
         # self.name = attr.attr
         # attr.attr.var = self
+
+def to_stmt(parent, stmt):
+    if isinstance(stmt, ast.Import):
+        stmt2 = Import(stmt)
+    elif isinstance(stmt, ast.ImportFrom):
+        stmt2 = ImportFrom(stmt)
+    elif isinstance(stmt, ast.Assign):
+        stmt2 = Assign(stmt)
+    elif isinstance(stmt, ast.AugAssign):
+        stmt2 = AugAssign(stmt)
+    elif isinstance(stmt, ast.AnnAssign):
+        stmt2 = AnnAssign(stmt)
+    elif isinstance(stmt, ast.With):
+        stmt2 = With(stmt)
+    elif isinstance(stmt, ast.For):
+        stmt2 = For(stmt)
+    elif isinstance(stmt, ast.Try):
+        stmt2 = Try(stmt)
+    elif isinstance(stmt, ast.Return):
+        stmt2 = Return(stmt)
+    elif isinstance(stmt, ast.If):
+        stmt2 = If(stmt)
+    elif isinstance(stmt, ast.Expr):
+        stmt2 = Expr(stmt)
+    elif isinstance(stmt, ast.Pass):
+        stmt2 = Pass()
+    elif isinstance(stmt, ast.Continue):
+        stmt2 = Continue()
+    elif isinstance(stmt, ast.Break):
+        stmt2 = Break()
+    elif isinstance(stmt, ast.Assert):
+        stmt2 = Assert(stmt)
+    elif isinstance(stmt, ast.ClassDef):
+        stmt2 = ClassDef(stmt)
+    elif isinstance(stmt, ast.FunctionDef):
+        stmt2 = FunctionDef(stmt)
+    else:
+        print(type(stmt))
+        print(stmt._fields, [ type(x) for x in stmt._fields ])
+        assert False
+        stmt2 = None
+
+    stmt2.parent = parent
+    return stmt2
 
 class Body(Statement):
     __slots__ = [ 'parent', 'statements' ]
 
     def __init__(self, parent, body):
         self.parent = parent
-        self.statements = []
-        for stmt in body:
-            if isinstance(stmt, ast.Import):
-                stmt2 = Import(stmt)
-            elif isinstance(stmt, ast.ImportFrom):
-                stmt2 = ImportFrom(stmt)
-            elif isinstance(stmt, ast.Assign):
-                stmt2 = Assign(stmt)
-            elif isinstance(stmt, ast.AnnAssign):
-                stmt2 = AnnAssign(stmt)
-            elif isinstance(stmt, ast.With):
-                stmt2 = With(stmt)
-            elif isinstance(stmt, ast.For):
-                stmt2 = For(stmt)
-            elif isinstance(stmt, ast.Return):
-                stmt2 = Return(stmt)
-            elif isinstance(stmt, ast.If):
-                stmt2 = If(stmt)
-            elif isinstance(stmt, ast.Expr):
-                stmt2 = Expr(stmt)
-            elif isinstance(stmt, ast.Pass):
-                stmt2 = Pass()
-            elif isinstance(stmt, ast.Continue):
-                stmt2 = Continue()
-            elif isinstance(stmt, ast.Assert):
-                stmt2 = Assert(stmt)
-            elif isinstance(stmt, ast.ClassDef):
-                stmt2 = ClassDef(stmt)
-            elif isinstance(stmt, ast.FunctionDef):
-                stmt2 = FunctionDef(stmt)
-            else:
-                print(type(stmt))
-                assert False
-
-            stmt2.parent = self
-            self.statements.append(stmt2)
+        self.statements = [ to_stmt(self, x) for x in body ]
 
     def __str__(self):
         return ''.join(str(x) for x in self.statements)
@@ -501,11 +683,19 @@ class Body(Statement):
             
 
 class FunctionDef(Obj):
-    __slots__ = [ 'name', 'args', 'body' ]
+    __slots__ = [ 'name', 'args', 'body', 'type' ]
 
     def __init__(self, fnc: ast.FunctionDef):
         self.name = fnc.name
         self.args = [ Arg(self, x) for x in fnc.args.args ]
+
+        arg_types = [ x.type for x in self.args ]
+        returns = to_type(term(self, fnc.returns))
+        self.type = TupleType(arg_types + [returns])
+
+        offset = len(self.args) - len(fnc.args.defaults)
+        for i, x in enumerate(fnc.args.defaults):
+            self.args[offset + i].default = term(self, x)
 
         self.body = Body(self, fnc.body)
 
@@ -514,24 +704,32 @@ class FunctionDef(Obj):
         return '\n%s\n%s\n' % (header, self.body.str_indent())
 
 
-class ClassDef(Obj):
-    __slots__ = [ 'bases', 'name', 'body', 'fields' ]
+class ClassDef(Type):
+    __slots__ = [ 'bases', 'name', 'fields' ]
 
     def __init__(self, cls: ast.ClassDef):
         self.name = cls.name
         self.bases = [ term(self, x) for x in cls.bases] 
-        self.body  = Body(self, cls.body)
+
+        statements = [ to_stmt(self, x) for x in cls.body ]
 
         classes[self.name] = self
 
-        stmt = self.body.statements[0]
+        stmt = statements[0]
         if isinstance(stmt, Assign) and len(stmt.targets) == 1 and \
             isinstance(stmt.targets[0], Name) and stmt.targets[0].id == '__slots__':
 
+            self.slots = stmt
             self.fields = [ Field(self, x.s) for x in stmt.value.elts ]
         else:
+            self.slots = None
             self.fields = []
 
+        self.methods = [ x for x in statements if isinstance(x, FunctionDef) ]        
+
+        for fnc in self.methods:
+            assert fnc.args[0].name == 'self'
+            fnc.args[0].type = self
 
         # def search_assign_self(obj):
         #     if isinstance(obj, Assign):
@@ -551,7 +749,21 @@ class ClassDef(Obj):
         else:
             header = 'class %s(%s):' % (self.name, ', '.join(str(x) for x in self.bases) )
 
-        return '\n%s\n%s\n' % (header, self.body.str_indent())
+        body = ''
+        if self.slots is not None:
+            body += '\t' + str(self.slots)
+
+        for method in self.methods:
+            s = str(method)
+            body += '\n'.join('\t%s' % x for x in s.split('\n')) + '\n'
+
+        return '%s\n%s' % (header, body)
+
+
+        # return '\n%s\n%s\n' % (header, self.body.str_indent())
+
+
+classes : Dict[str, ClassDef] = collections.OrderedDict()
 
 path = 'C:\\usr\\prj\\xbrl-reader\\python\\xbrl_reader.py'
 path = __file__
@@ -592,6 +804,8 @@ def term(parent, expr):
         trm = Dict_(expr)
     elif isinstance(expr, ast.Index):
         trm = Index(expr)
+    elif isinstance(expr, ast.Slice):
+        trm = Slice(expr)
     elif isinstance(expr, ast.Subscript):
         trm = Subscript(expr)
     elif isinstance(expr, ast.GeneratorExp):
@@ -616,8 +830,9 @@ def dmp(parent, obj):
     if isinstance(obj, Term) or isinstance(obj, Statement):
         assert obj.parent == parent
         
-    for k, x in obj.__dict__.items():
-        if k in [ 'parent', 'ctx', 'var' ]:
+    items = get_fields(obj)
+    for k, x in items:
+        if k in [ 'parent', 'ctx', 'var', 'type' ]:
             continue
         if x is not None:
             if isinstance(x, Obj):
@@ -644,8 +859,9 @@ def find_cond(obj, cond, search_list):
     if cond(obj):
         search_list.append(obj)
 
-    for k, x in obj.__dict__.items():
-        if k in [ 'parent', 'ctx', 'var' ]:
+    items = get_fields(obj)
+    for k, x in items:
+        if k in [ 'parent', 'ctx', 'var', 'type' ]:
             continue
         if x is not None:
             if isinstance(x, Obj):
@@ -657,8 +873,51 @@ def find_cond(obj, cond, search_list):
 
     return search_list
 
+def get_fields(obj):
+    if hasattr(obj, '__slots__') and (not hasattr(obj, '__dict__') or len(obj.__dict__) < len(obj.__slots__)):
+        items = []
+        for name in obj.__slots__:
+            x = getattr(obj, name)
+            items.append((name, x))
+    else:
+        items = obj.__dict__.items()
+
+    return items
+
+def navi_resolve_name(obj, vars):
+    len_vars = len(vars)
+    
+    if isinstance(obj, FunctionDef):
+        vars.insert(0, obj.args)
+    elif isinstance(obj, For):
+        vars.insert(0, obj.target)
+    elif isinstance(obj, Comprehension):
+        vars.insert(0, obj.target)
+
+    items = get_fields(obj)
+    for k, x in items:
+        if k in [ 'parent', 'ctx', 'var', 'type' ]:
+            continue
+        if x is not None:
+            if isinstance(x, Obj):
+
+                navi_resolve_name(x, vars)
+            elif isinstance(x, list):
+                for y in x:                    
+                    if isinstance(y, Obj):
+                        navi_resolve_name(y, vars)
+
+    obj.resolve_name(vars)
+
+    if len_vars < len(vars):
+        vars = vars[-len_vars:]
+        assert len_vars == len(vars)
+
 body = Body(None, root.body)
 dmp(None, body)
+
+vars = [ list(classes.values()) ]
+navi_resolve_name(body, vars)
 
 with codecs.open('dmp.py', 'w', 'utf-8') as f:
     f.write('%s' % body)
