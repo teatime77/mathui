@@ -1,5 +1,5 @@
-from syntax import Num, Name, Variable, ClassDef, Statement, Term, Obj, Index, Tuple_, Subscript
-from syntax import Assign, BinOp, Call, Expr
+from syntax import Num, Name, Variable, ClassDef, Statement, Term, Obj, Index, Tuple2, Subscript
+from syntax import Assign, BinOp, Call, Expr, Body, Compare, BoolOp
 
 html_str = """<!DOCTYPE html>
 <html lang="ja">
@@ -17,15 +17,14 @@ html_str = """<!DOCTYPE html>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.2/MathJax.js?config=default"></script>
 </head>
 <body>
-<math>
 %s
-</math>
 </body>
 </html>
 """
 
 math_op_dic = {
      '*'  :'&middot;', 
+     '=='  :'=', 
      '!=' :'&ne;' , 
      '<'  :'&lt;', 
      '<=' :'&le;', 
@@ -68,8 +67,8 @@ def math_op(op):
     else:
         return op
 
-def make_mathml_html(obj):
-    return html_str % obj.mathml()
+def make_mathml(obj):
+    return '<math>\n%s\n</math>\n' % obj.mathml()
 
 def Obj_mathml(self:Obj):
     assert False
@@ -108,6 +107,15 @@ def BinOp_mathml(self: BinOp):
     else:
         return s
 
+def BoolOp_mathml(self: BoolOp):
+    s =  ('<mo> %s </mo>' % math_op(self.op)).join(x.mathml() for x in self.values)
+    if self.with_parenthesis:
+        return '<mfenced separators="">%s</mfenced>' % s
+    else:
+        return '<mrow>%s</mrow>' % s
+
+
+
 def Variable_mathml(self: Variable):
     return '<mrow><mi>%s</mi><mo>&isin;</mo>%s</mrow>' % (toMathMLName(self.name), self.type.mathML())
 
@@ -120,6 +128,9 @@ def Statement_mathml(self: Statement):
 
 def Expr_mathml(self: Expr):
     return self.value.mathml()
+
+def Body_mathml(self: Body):
+    return '\n'.join(x.mathml() for x in self.statements)
 
 def list_mathml(tpl):
     if len(tpl) == 1:
@@ -137,8 +148,11 @@ def Term_mathml(self: Term):
 # def Num_mathml():
 #     return '<mn id='%s'>%s</mn>' % (self.id, '' + self.value)
 
+def Tuple2_mathml(self: Tuple2):
+    return '<mfenced>%s</mfenced>' % ''.join(x.mathml() for x in self.elts)
+
 def Index_mathml(self: Index):
-    if isinstance(self.value, Tuple_):
+    if isinstance(self.value, Tuple2):
         return '<mrow>%s</mrow>' % '<mo>,</mo>'.join( x.mathml() for x in self.value.elts )
     else:
         return self.value.mathml()
@@ -147,28 +161,30 @@ def Subscript_mathml(self: Subscript):
     return '<msub>%s%s</msub>' % (self.value.mathml(), self.slice.mathml())
 
 def Call_mathml(self: Call):
+    formats = {
+        'sum'     : '<mrow> <munderover><mo>&Sum;</mo> <mrow>%s<mo>=</mo>%s</mrow> %s </munderover> %s </mrow>',
+        'sqrt'    : '<msqrt>%s</msqrt>',
+        'integral': '<mrow> <munderover><mo>&#x222B;</mo> %s %s </munderover> %s <mi>d</mi> %s </mrow>',
+        'lim'     : '<mrow> <munder><mo>lim</mo> <mrow>%s<mo>&rarr;</mo>%s</mrow></munder> %s </mrow>',
+        'dif'     : '<mfrac><mrow><mi>d</mi>%s</mrow> <mrow><mi>d</mi>%s</mrow></mfrac>',
+        'norm'    : '<mfenced open="||" close="||"> %s </mfenced>',
+        'prob'    : '<mrow> <mi>P</mi> <mfenced separators=""> %s <mo>|</mo> %s </mfenced></mrow>',
+    }
+
     args = tuple(x.mathml() for x in self.args)
     if isinstance(self.func, Name):
         func_name = self.func.get_name()
-        if func_name == 'sum':
-            return '<mrow> <munderover><mo>&Sum;</mo> <mrow>%s<mo>=</mo>%s</mrow> %s </munderover> %s </mrow>' % args
 
-        elif func_name == 'sqrt':
-            return '<msqrt>%s</msqrt>' % self.args[0].mathml()
-
-        elif func_name == 'integral':
-            return '<mrow> <munderover><mo>&#x222B;</mo> %s %s </munderover> %s <mi>d</mi> %s </mrow>' % args
-        elif func_name == 'lim':
-            return '<mrow> <munder><mo>lim</mo> <mrow>%s<mo>&rarr;</mo>%s</mrow></munder> %s </mrow>' % args
-        elif func_name == 'dif':
-            return '<mfrac><mrow><mi>d</mi>%s</mrow> <mrow><mi>d</mi>%s</mrow></mfrac>' % args
-        elif func_name == 'norm':
-            # return '<mfenced open="||" close="||"> %s </mfenced>' % args[0]
-            return '<mfenced open="||" close="||"> %s </mfenced>' % args
+        if func_name in formats:
+            return formats[func_name] % args
         else:
             return '<mrow>%s<mfenced open="(" close=")">%s</mfenced></mrow>' % (self.func.mathml(), ''.join(args))
     else:
         return '<mrow><mfenced> %s </mfenced><mfenced open="(" close=")">%s</mfenced></mrow>' % (self.func.mathml(), ''.join(args))
+
+def Compare_mathml(self: Compare):
+        s = ' '.join('<mo>%s</mo> %s' % (math_op_dic[op], t.mathml()) for op, t in zip(self.ops, self.comparators))
+        return '<mrow>%s %s</mrow>' % (self.left.mathml(), s )
 
 """
 mathMLSub2(: 

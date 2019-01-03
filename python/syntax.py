@@ -19,8 +19,10 @@ opr_dic = {
     ast.USub : '-',
     ast.Mult: '*',
     ast.Div : '/',
+    ast.FloorDiv : '//',
     ast.Mod : '%',
     ast.Pow : '**',
+    ast.BitOr : '|',
     ast.Not : 'not',
     ast.Is : 'is',
     ast.IsNot : 'is not',
@@ -100,7 +102,7 @@ def to_type(trm):
         assert isinstance(trm.slice, Index)
         name = trm.value.get_name()
         if name == 'Dict' or name == 'Tuple':
-            assert isinstance(trm.slice.value, Tuple_)
+            assert isinstance(trm.slice.value, Tuple2)
             element_types = [ to_type(x) for x in trm.slice.value.elts ]
 
             if name == 'Dict':
@@ -117,7 +119,7 @@ def to_type(trm):
 class Term(Obj):
     __slots__ = [ 'type' ]
 
-class Tuple_(Term):
+class Tuple2(Term):
     __slots__ = [ 'elts' ]
 
     def __init__(self, expr):
@@ -126,7 +128,7 @@ class Tuple_(Term):
     def __str__(self):
         return '(' + ', '.join(str(x) for x in self.elts) + ')'
 
-class List_(Term):
+class List2(Term):
     __slots__ = [ 'elts' ]
 
     def __init__(self, expr):
@@ -153,7 +155,7 @@ class Index(Term):
         self.value = term(self, expr.value)
 
     def __str__(self):
-        if isinstance(self.value, Tuple_):
+        if isinstance(self.value, Tuple2):
             return ', '.join(str(x) for x in self.value.elts)
         else:
             return str(self.value)
@@ -313,10 +315,12 @@ class BinOp(Term):
     def getPrecedence(self):
         if self.op in [ '**' ]:
             return 1
-        elif self.op in [ '*', '/' ]:
+        elif self.op in [ '*', '/', '//' ]:
             return 2
         elif self.op in [ '+', '-' ]:
             return 3
+        elif self.op in [ '|' ]:
+            return 1
         else:
             assert False
             return None
@@ -826,9 +830,9 @@ def term(parent, expr):
     elif isinstance(expr, ast.Compare):
         trm = Compare(expr)
     elif isinstance(expr, ast.List):
-        trm = List_(expr)
+        trm = List2(expr)
     elif isinstance(expr, ast.Tuple):
-        trm = Tuple_(expr)
+        trm = Tuple2(expr)
     elif isinstance(expr, ast.Dict):
         trm = Dict_(expr)
     elif isinstance(expr, ast.Index):
