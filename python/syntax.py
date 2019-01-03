@@ -4,7 +4,11 @@ import numpy as np
 from typing import List, Tuple, Dict
 import collections
 
-a : Dict[str, int] = {}
+
+if ((1 + 2) * 3 == 0 or 1 == 2) and 2 == 3:
+    pass
+a : Dict[str, int]
+b : List[int]
 
 opr_dic = {
     ast.Eq : '==',
@@ -13,7 +17,10 @@ opr_dic = {
     ast.Add : '+',
     ast.Sub : '-',
     ast.USub : '-',
+    ast.Mult: '*',
+    ast.Div : '/',
     ast.Mod : '%',
+    ast.Pow : '**',
     ast.Not : 'not',
     ast.Is : 'is',
     ast.IsNot : 'is not',
@@ -23,18 +30,6 @@ opr_dic = {
     ast.In : 'in'
 }
 
-a = True
-b = True
-c = True
-
-if a:
-    print('')
-elif b:
-    print('')
-elif c:
-    print('')
-else:
-    print('')
     
 
 x = 1
@@ -54,9 +49,15 @@ def find(search_iteration):
     except StopIteration:
         return None
 
+def Hi(self, msg):
+    print(msg)
+
 class Obj:
     __slots__ = [ 'parent' ]
-    
+
+    def __init__(self):
+        pass
+
     def get_name(self):
         if isinstance(self, Name):
             return self.id
@@ -193,7 +194,7 @@ class Subscript(Term):
 # def find_var(vars, name):
 
 class Name(Term):
-    __slots__ = [ 'id', 'var' ]
+    __slots__ = [ 'id', 'var', 'mathml' ]
 
     def __init__(self, expr):
         self.id = expr.id
@@ -283,17 +284,6 @@ class Compare(Term):
         s = ' '.join('%s %s' % (op, t) for op, t in zip(self.ops, self.comparators))
         return '%s %s' % (self.left, s )
 
-class BinOp(Term):
-    __slots__ = [ 'left', 'op', 'right' ]
-
-    def __init__(self, expr):
-        self.left = term(self, expr.left)
-        self.op   = opr_dic[type(expr.op)]
-        self.right = term(self, expr.right)
-
-    def __str__(self):
-        return '%s %s %s' % (self.left, self.op, self.right)
-
 class UnaryOp(Term):
     __slots__ = [ 'op', 'operand' ]
 
@@ -304,22 +294,72 @@ class UnaryOp(Term):
     def __str__(self):
         return '%s %s' % (self.op, self.operand)
 
+class BinOp(Term):
+    __slots__ = [ 'left', 'op', 'right', 'with_parenthesis' ]
+
+    def __init__(self, expr):
+        self.left = term(self, expr.left)
+        self.op   = opr_dic[type(expr.op)]
+        self.right = term(self, expr.right)
+        self.with_parenthesis = None
+
+    def __str__(self):
+        s = '%s %s %s' % (self.left, self.op, self.right)
+        if self.with_parenthesis:
+            return '(' + s + ')'
+        else:
+            return s
+
+    def getPrecedence(self):
+        if self.op in [ '**' ]:
+            return 1
+        elif self.op in [ '*', '/' ]:
+            return 2
+        elif self.op in [ '+', '-' ]:
+            return 3
+        else:
+            assert False
+            return None
+
 class BoolOp(Term):
-    __slots__ = [ 'op', 'values' ]
+    __slots__ = [ 'op', 'values', 'with_parenthesis' ]
 
     def __init__(self, expr):
         self.op   = opr_dic[type(expr.op)]
         self.values = [ term(self, x) for x in expr.values ]
+        self.with_parenthesis = None
 
     def __str__(self):
-        return (' %s ' % self.op).join(str(x) for x in self.values)
+        s =  (' %s ' % self.op).join(str(x) for x in self.values)
+        if self.with_parenthesis:
+            return '(' + s + ')'
+        else:
+            return s
+
+    def getPrecedence(self):
+        if self.op == 'not':
+            return 1
+        elif self.op == 'and':
+            return 2
+        elif self.op == 'or':
+            return 3
+        else:
+            assert False
+
+class Keyword(Obj):
+    __slots__ = [ 'arg', 'value' ]
+    def __init__(self, parent, kw: ast.keyword):
+        self.parent = parent
+        self.arg  = kw.arg
+        self.value = term(self, kw.value)
 
 class Call(Term):
-    __slots__ = [ 'func', 'args' ]
+    __slots__ = [ 'func', 'args', 'keywords' ]
 
-    def __init__(self, expr):
+    def __init__(self, expr: ast.Call):
         self.func = term(self, expr.func)
         self.args = [ term(self, x) for x in expr.args]
+        self.keywords = collections.OrderedDict( (x.arg, term(self, x.value)) for x in expr.keywords)
 
     def __str__(self):
         return '%s(%s)' % (self.func, ', '.join(str(x) for x in self.args))
@@ -448,8 +488,6 @@ class Comprehension:
         self.iter = term(self, cmp.iter)
         self.target = target_vars(self, cmp.target)
         self.ifs = [ term(self, x) for x in cmp.ifs]
-        if len(cmp.ifs) != 0:
-            print('')
 
     def __str__(self):
         target = ', '.join(str(x) for x in self.target)
@@ -513,8 +551,6 @@ class If(Statement):
                 stmt.orelse[0].prev = self
             # print(', '.join(str(type(x)) for x in stmt.orelse))
             # print('')
-        if 2 <= len(stmt.orelse):
-            print('')
 
     def __str__(self):
         return self.elif_str(True)
@@ -765,13 +801,6 @@ class ClassDef(Type):
 
 classes : Dict[str, ClassDef] = collections.OrderedDict()
 
-path = 'C:\\usr\\prj\\xbrl-reader\\python\\xbrl_reader.py'
-path = __file__
-with codecs.open(path, 'r', 'utf-8') as f:
-    source_text = f.read()
-
-root = ast.parse(source_text)
-
 def term(parent, expr):
     if expr is None:
         return None
@@ -852,27 +881,6 @@ def dmp(parent, obj):
             else:
                 print(type(x))
 
-def find_cond(obj, cond, search_list):
-    if not hasattr(obj, '__dict__'):
-        return search_list
-
-    if cond(obj):
-        search_list.append(obj)
-
-    items = get_fields(obj)
-    for k, x in items:
-        if k in [ 'parent', 'ctx', 'var', 'type' ]:
-            continue
-        if x is not None:
-            if isinstance(x, Obj):
-
-                find_cond(x, cond, search_list)
-            elif isinstance(x, list):
-                for y in x:                    
-                    find_cond(y, cond, search_list)
-
-    return search_list
-
 def get_fields(obj):
     if hasattr(obj, '__slots__') and (not hasattr(obj, '__dict__') or len(obj.__dict__) < len(obj.__slots__)):
         items = []
@@ -882,7 +890,24 @@ def get_fields(obj):
     else:
         items = obj.__dict__.items()
 
+    items = [ (k, v) for k, v in items if not k in [ 'parent', 'ctx', 'var', 'type' ] ]
     return items
+
+
+def navi_obj(obj, fnc, *args):
+    fnc(obj)
+
+    items = get_fields(obj)
+    for _, x in items:
+        if x is not None:
+            if isinstance(x, Obj):
+
+                navi_obj(x, fnc, args)
+            elif isinstance(x, list):
+                for y in x:                    
+                    if isinstance(y, Obj):
+                        navi_obj(y, fnc, args)
+
 
 def navi_resolve_name(obj, vars):
     len_vars = len(vars)
@@ -913,11 +938,11 @@ def navi_resolve_name(obj, vars):
         vars = vars[-len_vars:]
         assert len_vars == len(vars)
 
-body = Body(None, root.body)
-dmp(None, body)
-
-vars = [ list(classes.values()) ]
-navi_resolve_name(body, vars)
-
-with codecs.open('dmp.py', 'w', 'utf-8') as f:
-    f.write('%s' % body)
+def setParenthesis(obj):
+    if isinstance(obj, BinOp) or isinstance(obj, BoolOp):
+        obj.with_parenthesis = False
+        parent = obj.parent
+        if isinstance(parent, UnaryOp):
+            obj.with_parenthesis = True
+        elif type(parent) == type(obj) and parent.op != obj.op and parent.getPrecedence() <= obj.getPrecedence():
+            obj.with_parenthesis = True
