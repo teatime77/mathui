@@ -14,6 +14,8 @@ opr_dic = {
     ast.Eq : '==',
     ast.Lt  : '<',
     ast.LtE : '<=',
+    ast.Gt  : '>',
+    ast.GtE : '>=',
     ast.Add : '+',
     ast.Sub : '-',
     ast.USub : '-',
@@ -181,6 +183,12 @@ class Slice(Obj):
 
         return '%s:%s' % (s1, s2)
 
+class ExtSlice(Obj):
+    def __init__(self, expr):
+        self.dims = [ term(self, x) for x in expr.dims]
+
+    def __str__(self):
+        return ', '.join(str(x) for x in self.dims)
 
 class Subscript(Term):
     __slots__ = [ 'slice', 'value' ]
@@ -839,6 +847,8 @@ def term(parent, expr):
         trm = Index(expr)
     elif isinstance(expr, ast.Slice):
         trm = Slice(expr)
+    elif isinstance(expr, ast.ExtSlice):
+        trm = ExtSlice(expr)
     elif isinstance(expr, ast.Subscript):
         trm = Subscript(expr)
     elif isinstance(expr, ast.GeneratorExp):

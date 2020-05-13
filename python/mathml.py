@@ -1,5 +1,5 @@
-from syntax import Num, Name, Variable, ClassDef, Statement, Term, Obj, Index, Tuple2, Subscript
-from syntax import Assign, BinOp, Call, Expr, Body, Compare, BoolOp
+from syntax import Num, Name, Variable, ClassDef, Statement, Term, Obj, Index, Tuple2, List2, Subscript, Slice, ExtSlice
+from syntax import Assign, BinOp, Call, Expr, Body, Compare, BoolOp, NameConstant
 
 html_str = """<!DOCTYPE html>
 <html lang="ja">
@@ -31,6 +31,12 @@ math_op_dic = {
      '>'  :'&gt;' , 
      '>=' :'&ge;' 
 }
+
+def ml(o):
+    if o is None:
+        return ''
+    else:
+        return o.mathml()
 
 def toMathMLName(name : str):
     v = [ 
@@ -77,10 +83,19 @@ def Obj_mathml(self:Obj):
 def Num_mathml(self:Num):
     return '<mn>%s</mn>' % self.n
 
+def NameConstant_mathml(self: NameConstant):
+    if self.value is None:
+        return ''
+    else:
+        return '<mi>%s</mi>' % self.value
 
 def Name_mathml(self:Name):
-    name = toMathMLName(self.id)
-    return '<mi>%s</mi>' % name
+    if self.id.endswith('_'):
+        name = toMathMLName(self.id[:-1])
+        return "<mrow><mi>%s</mi><mo>'</mo></mrow>" % name
+    else:
+        name = toMathMLName(self.id)
+        return '<mi>%s</mi>' % name
 
 def Name_mathml2(self: Name):
     name = toMathMLName(self.id)
@@ -151,36 +166,76 @@ def Term_mathml(self: Term):
 def Tuple2_mathml(self: Tuple2):
     return '<mfenced>%s</mfenced>' % ''.join(x.mathml() for x in self.elts)
 
+def List2_mathml(self: List2):
+    return '<mfenced open="[" close="]">%s</mfenced>' % ''.join(x.mathml() for x in self.elts)
+
 def Index_mathml(self: Index):
     if isinstance(self.value, Tuple2):
         return '<mrow>%s</mrow>' % '<mo>,</mo>'.join( x.mathml() for x in self.value.elts )
     else:
         return self.value.mathml()
 
-def Subscript_mathml(self: Subscript):
-    return '<msub>%s%s</msub>' % (self.value.mathml(), self.slice.mathml())
+def Slice_mathml(self: Slice):
 
+    return '<mfenced>%s</mfenced>' % ''.join(x.mathml() for x in self.dims)
+
+def ExtSlice_mathml(self: ExtSlice):
+    return '<mfenced>%s</mfenced>' % ''.join(x.mathml() for x in self.dims)
+
+def Subscript_mathml(self: Subscript):
+    value = self.value.mathml()
+    if isinstance(self.slice, Slice):
+        assert self.slice.upper is not None
+        if self.slice.lower is None:
+            return '<msup>%s %s</msup>' % (value, ml(self.slice.upper))
+        else:
+            return '<msubsup>%s %s %s</msubsup>' % (value, ml(self.slice.lower), ml(self.slice.upper))
+
+    elif isinstance(self.slice, Index) and isinstance(self.slice.value, Tuple2) and len(self.slice.value.elts) == 2:
+        elts = self.slice.value.elts
+        return '<msubsup>%s %s %s</msubsup>' % (value, ml(elts[0]), ml(elts[1]))
+    else:
+        slice = self.slice.mathml()
+        return '<msub>%s%s</msub>' % (value, slice)
+
+def is_none(o):
+    if isinstance(o, NameConstant) and o.value is None:
+        return True
+    else:
+        return False
+    
 def Call_mathml(self: Call):
     formats = {
-        'sum'     : '<mrow> <munderover><mo>&Sum;</mo> <mrow>%s<mo>=</mo>%s</mrow> %s </munderover> %s </mrow>',
+        # 'sum'     : '<mrow> <munderover><mo>&Sum;</mo> <mrow>%s<mo>=</mo>%s</mrow> %s </munderover> %s </mrow>',
+        'sup'     : '<msup>%s %s</msup>',
+        'subsup'  : '<msubsup>%s %s %s</msubsup>',
+        'log'     : '<mrow><mi>log</mi>%s</mrow>',
         'sqrt'    : '<msqrt>%s</msqrt>',
         'integral': '<mrow> <munderover><mo>&#x222B;</mo> %s %s </munderover> %s <mi>d</mi> %s </mrow>',
         'lim'     : '<mrow> <munder><mo>lim</mo> <mrow>%s<mo>&rarr;</mo>%s</mrow></munder> %s </mrow>',
-        'dif'     : '<mfrac><mrow><mi>d</mi>%s</mrow> <mrow><mi>d</mi>%s</mrow></mfrac>',
+        'diff'     : '<mfrac><mrow><mi>d</mi>%s</mrow> <mrow><mi>d</mi>%s</mrow></mfrac>',
+        'pdiff'     : '<mfrac><mrow><mi>&part;</mi>%s</mrow> <mrow><mi>&part;</mi>%s</mrow></mfrac>',
         'norm'    : '<mfenced open="||" close="||"> %s </mfenced>',
         'prob'    : '<mrow> <mi>P</mi> <mfenced separators=""> %s <mo>|</mo> %s </mfenced></mrow>',
     }
 
-    args = tuple(x.mathml() for x in self.args)
+    args = tuple(ml(x) for x in self.args)
     if isinstance(self.func, Name):
         func_name = self.func.get_name()
 
         if func_name in formats:
             return formats[func_name] % args
+        elif func_name == 'sum':
+            if is_none(self.args[1]):
+                fmt = '<mrow> <munderover><mo>&Sum;</mo> <mrow>%s %s</mrow> %s </munderover> %s </mrow>'
+            else:
+                fmt = '<mrow> <munderover><mo>&Sum;</mo> <mrow>%s<mo>=</mo>%s</mrow> %s </munderover> %s </mrow>'
+            return fmt % args
         else:
             return '<mrow>%s<mfenced open="(" close=")">%s</mfenced></mrow>' % (self.func.mathml(), ''.join(args))
     else:
-        return '<mrow><mfenced> %s </mfenced><mfenced open="(" close=")">%s</mfenced></mrow>' % (self.func.mathml(), ''.join(args))
+        # return '<mrow><mfenced> %s </mfenced><mfenced open="(" close=")">%s</mfenced></mrow>' % (self.func.mathml(), ''.join(args))
+        return '<mrow>%s<mfenced open="(" close=")">%s</mfenced></mrow>' % (self.func.mathml(), ''.join(args))
 
 def Compare_mathml(self: Compare):
         s = ' '.join('<mo>%s</mo> %s' % (math_op_dic[op], t.mathml()) for op, t in zip(self.ops, self.comparators))
